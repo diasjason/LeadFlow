@@ -1,0 +1,366 @@
+// prisma/schema.prisma
+// LeadFlow CRM — Database Schema v1.0
+// Designed for: Next.js 14 + Neon Postgres (POC) → AWS RDS (scale)
+// 
+// Key design decisions:
+// - leadSource stored as enum (not separate table) — simplicity for MVP
+// - messages table is channel-agnostic — works for WhatsApp, SMS, email
+// - followUps are scheduled events, not message history
+// - importBatch tracks Excel imports for audit trail
+// - All timestamps in UTC
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+}
+
+// ─── Enums ────────────────────────────────────────────────
+
+enum LeadSource {
+  FACEBOOK
+  INSTAGRAM
+  REFERRAL
+  EXCEL_IMPORT
+  WEBSITE
+  GOOGLE_ADS
+  WHATSAPP     // Direct WhatsApp inquiry
+  OTHER
+}
+
+enum LeadCategory {
+  HOT
+  WARM
+  COLD
+}
+
+enum LeadStage {
+  NEW
+  CONTACTED
+  FOLLOW_UP
+  INTERESTED
+  VISIT_SCHEDULED
+  VISIT_DONE
+  DOCS_COLLECTED
+  CLOSED_WON
+  CLOSED_LOST
+}
+
+enum MessageChannel {
+  WHATSAPP
+  SMS
+  EMAIL
+}
+
+enum MessageDirection {
+  OUTBOUND  // We sent to lead
+  INBOUND   // Lead sent to us
+}
+
+enum MessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum FollowUpStatus {
+  SCHEDULED
+  COMPLETED
+  SKIPPED
+  AUTO_CLOSED  // 6-attempt rule triggered
+}
+
+enum DocumentType {
+  AADHAAR
+  PAN
+  SALARY_SLIP
+  BANK_STATEMENT
+  IT_RETURNS
+  AGREEMENT
+  PHOTO
+  ADDRESS_PROOF
+  OTHER
+}
+
+enum BroadcastStatus {
+  DRAFT
+  SENDING
+  COMPLETED
+  FAILED
+}
+
+// ─── Models ───────────────────────────────────────────────
+
+/// Organization/tenant — supports multi-tenancy when you scale
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  email     String?
+  whatsappBusinessId String?  // Meta WhatsApp Business Account ID
+  whatsappPhoneId    String?  // Meta phone number ID for sending
+  whatsappToken      String?  // Meta access token (encrypted at rest)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  users     User[]
+  leads     Lead[]
+  broadcasts Broadcast[]
+  importBatches ImportBatch[]
+  
+  @@map("organizations")
+}
+
+/// User — agents/team members who manage leads
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  image     String?
+  role      String   @default("agent") // "admin" | "agent" | "viewer"
+  
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  assignedLeads Lead[]      @relation("AssignedAgent")
+  messages      Message[]   @relation("SentBy")
+  followUps     FollowUp[]  @relation("CreatedBy")
+  
+  @@map("users")
+}
+
+/// Lead — the core entity. Every feature revolves around this.
+model Lead {
+  id          String       @id @default(cuid())
+  
+  // Contact info
+  name        String
+  phone       String       // Normalized: +91XXXXXXXXXX
+  email       String?
+  
+  // Classification
+  source      LeadSource   @default(OTHER)
+  category    LeadCategory @default(WARM)
+  stage       LeadStage    @default(NEW)
+  
+  // Follow-up tracking
+  attempts       Int       @default(0)  // Total contact attempts (max 6 → auto COLD)
+  maxAttempts    Int       @default(6)  // Configurable per lead
+  lastContactAt  DateTime? // When we last reached out
+  nextFollowUpAt DateTime? // When the next follow-up is due
+  
+  // Visit tracking
+  visitDate      DateTime? // Scheduled site visit date
+  visitCompletedAt DateTime? // When visit actually happened
+  
+  // Metadata
+  notes       String?      // Free-form notes about the lead
+  metadata    Json?        // Flexible: budget, BHK preference, location, etc.
+  
+  // Relationships
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  
+  assignedToId   String?
+  assignedTo     User?     @relation("AssignedAgent", fields: [assignedToId], references: [id])
+  
+  importBatchId  String?   // Which import batch this lead came from (null = manual)
+  importBatch    ImportBatch? @relation(fields: [importBatchId], references: [id])
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  closedAt  DateTime? // When deal was closed (won or lost)
+  
+  // Related records
+  messages   Message[]
+  followUps  FollowUp[]
+  documents  Document[]
+  stageHistory StageTransition[]
+  
+  // Indexes for common queries
+  @@index([organizationId, stage])
+  @@index([organizationId, category])
+  @@index([organizationId, source])
+  @@index([organizationId, nextFollowUpAt])
+  @@index([phone, organizationId])
+  @@map("leads")
+}
+
+/// Message — channel-agnostic message log (WhatsApp, SMS, email)
+/// This is the messaging abstraction at the data level
+model Message {
+  id        String          @id @default(cuid())
+  
+  channel   MessageChannel  // WHATSAPP | SMS | EMAIL
+  direction MessageDirection // OUTBOUND | INBOUND
+  status    MessageStatus   @default(QUEUED)
+  
+  // Content
+  body      String          // Message text
+  mediaUrl  String?         // Image/doc attachment URL if any
+  templateId String?        // WhatsApp template ID used (for template msgs)
+  
+  // External tracking
+  externalId String?        // Meta message ID / Twilio SID for tracking
+  
+  // Relationships
+  leadId    String
+  lead      Lead            @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  
+  sentById  String?         // null = system-generated (auto follow-up)
+  sentBy    User?           @relation("SentBy", fields: [sentById], references: [id])
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  deliveredAt DateTime?
+  readAt      DateTime?
+  
+  @@index([leadId, createdAt])
+  @@index([externalId])
+  @@map("messages")
+}
+
+/// FollowUp — scheduled follow-up events for leads
+model FollowUp {
+  id        String         @id @default(cuid())
+  
+  status    FollowUpStatus @default(SCHEDULED)
+  attemptNumber Int        // Which attempt this is (1-6)
+  
+  scheduledAt DateTime     // When this follow-up is due
+  completedAt DateTime?    // When it was actually done
+  
+  // What message to send (can be auto-generated or manual)
+  messageTemplate String?  // Template text or template ID
+  channel   MessageChannel @default(WHATSAPP)
+  
+  // Result of the follow-up
+  outcome   String?        // "responded", "no_answer", "not_interested", etc.
+  notes     String?
+  
+  // Relationships
+  leadId    String
+  lead      Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  
+  createdById String?
+  createdBy   User?        @relation("CreatedBy", fields: [createdById], references: [id])
+  
+  messageId String?        // Links to the actual message sent
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@index([leadId, status])
+  @@index([scheduledAt, status])   // Critical for cron: find due follow-ups
+  @@map("follow_ups")
+}
+
+/// Document — files uploaded for a lead (Aadhaar, PAN, etc.)
+model Document {
+  id        String       @id @default(cuid())
+  
+  type      DocumentType
+  fileName  String       // Original filename
+  fileUrl   String       // S3 presigned URL or key
+  fileSize  Int?         // Bytes
+  mimeType  String?      // "application/pdf", "image/jpeg", etc.
+  
+  // Relationships
+  leadId    String
+  lead      Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  
+  uploadedAt DateTime @default(now())
+  
+  @@index([leadId])
+  @@map("documents")
+}
+
+/// StageTransition — audit trail of every stage change
+model StageTransition {
+  id        String    @id @default(cuid())
+  
+  fromStage LeadStage
+  toStage   LeadStage
+  reason    String?   // "manual", "auto_cold_6_attempts", "visit_completed", etc.
+  
+  leadId    String
+  lead      Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime  @default(now())
+  
+  @@index([leadId, createdAt])
+  @@map("stage_transitions")
+}
+
+/// Broadcast — bulk re-marketing campaigns to lost leads
+model Broadcast {
+  id        String          @id @default(cuid())
+  
+  status    BroadcastStatus @default(DRAFT)
+  message   String          // Broadcast message text
+  channel   MessageChannel  @default(WHATSAPP)
+  
+  // Stats
+  totalRecipients Int @default(0)
+  sent            Int @default(0)
+  delivered       Int @default(0)
+  failed          Int @default(0)
+  
+  // Filter criteria (which leads were targeted)
+  filterCriteria Json?  // { stages: ["CLOSED_LOST"], sources: [...] }
+  
+  // Relationships
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  
+  createdAt  DateTime @default(now())
+  startedAt  DateTime?
+  completedAt DateTime?
+  
+  @@map("broadcasts")
+}
+
+/// ImportBatch — tracks each Excel/CSV import for audit trail
+/// When you get the client's Excel file, this is ready to go
+model ImportBatch {
+  id        String   @id @default(cuid())
+  
+  fileName  String   // Original uploaded filename
+  fileUrl   String?  // S3 key for the original file
+  
+  // Column mapping snapshot (so you can re-audit later)
+  columnMapping Json  // { "Column A": "name", "Column B": "phone", ... }
+  
+  // Import stats
+  totalRows    Int @default(0)
+  imported     Int @default(0)
+  skipped      Int @default(0)
+  errors       Int @default(0)
+  
+  // Defaults applied during import
+  defaultSource   LeadSource   @default(EXCEL_IMPORT)
+  defaultCategory LeadCategory @default(WARM)
+  sendWelcome     Boolean      @default(false) // Whether WhatsApp was sent on import
+  
+  // Error log for rows that failed
+  errorLog Json?  // [{ row: 5, reason: "missing phone" }, ...]
+  
+  // Relationships
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  
+  leads     Lead[]  // All leads created from this import
+  
+  createdAt DateTime @default(now())
+  
+  @@map("import_batches")
+}
