@@ -75,12 +75,32 @@ export function BroadcastModal({
   const handleConfirmSend = async () => {
     setIsSending(true)
 
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    try {
+      const response = await fetch('/api/broadcast', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: message.trim(),
+          leadIds: Array.from(selectedLeads),
+        }),
+      })
 
-    setIsSending(false)
-    setIsSent(true)
-    toast.success(`Broadcast queued to ${selectedLeads.size} leads`)
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        throw new Error(payload.error ?? 'Failed to queue broadcast')
+      }
+
+      setIsSent(true)
+      toast.success(`Broadcast queued to ${selectedLeads.size} leads`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Broadcast failed')
+      setShowConfirmation(false)
+      return
+    } finally {
+      setIsSending(false)
+    }
 
     // Reset and close after a short delay
     setTimeout(() => {

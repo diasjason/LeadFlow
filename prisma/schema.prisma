@@ -52,6 +52,7 @@ enum MessageChannel {
   WHATSAPP
   SMS
   EMAIL
+  PHONE  // Vapi AI voice calls
 }
 
 enum MessageDirection {
@@ -119,6 +120,7 @@ model Organization {
 /// User — agents/team members who manage leads
 model User {
   id        String   @id @default(cuid())
+  clerkId   String?  @unique  // Clerk user ID for auth mapping
   email     String   @unique
   name      String
   image     String?

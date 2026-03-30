@@ -1,6 +1,16 @@
-import { LeadCategory, LeadSource, LeadStage, type Lead } from '@prisma/client'
-import { NextResponse } from 'next/server'
+import {
+  LeadCategory,
+  LeadSource,
+  LeadStage,
+  MessageChannel,
+  MessageDirection,
+  type Lead,
+} from '@prisma/client'
+import { NextRequest, NextResponse } from 'next/server'
+import { getMessageProvider } from '@/lib/messaging/provider'
+import { WHATSAPP_TEMPLATES } from '@/lib/messaging/templates'
 import { prisma } from '@/lib/prisma'
+import { getNextFollowUpDate } from '@/lib/workflow/engine'
 
 const defaultDocuments = {
   aadhaar: false,
@@ -138,8 +148,22 @@ function toUiLead(lead: Lead) {
   }
 }
 
-async function getOrganizationId() {
-  const existing = await prisma.organization.findFirst({ select: { id: true } })
+async function getOrganizationId(preferredOrganizationId?: string) {
+  if (preferredOrganizationId) {
+    const found = await prisma.organization.findUnique({
+      where: { id: preferredOrganizationId },
+      select: { id: true },
+    })
+
+    if (found) {
+      return found.id
+    }
+  }
+
+  const existing = await prisma.organization.findFirst({
+    select: { id: true },
+    orderBy: { createdAt: 'asc' },
+  })
   if (existing) {
     return existing.id
   }
@@ -154,9 +178,12 @@ async function getOrganizationId() {
   return organization.id
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const organizationId = request.nextUrl.searchParams.get('organizationId')
+
     const leads = await prisma.lead.findMany({
+      where: organizationId ? { organizationId } : undefined,
       orderBy: { createdAt: 'desc' },
     })
 
@@ -178,7 +205,24 @@ export async function POST(request: Request) {
       )
     }
 
-    const organizationId = await getOrganizationId()
+    const organizationId = await getOrganizationId(
+      body.organizationId ? String(body.organizationId) : undefined
+    )
+
+    const duplicateLead = await prisma.lead.findFirst({
+      where: {
+        organizationId,
+        phone: String(body.phone),
+      },
+      select: { id: true },
+    })
+
+    if (duplicateLead) {
+      return NextResponse.json(
+        { error: 'Lead with this phone already exists in this organization' },
+        { status: 409 }
+      )
+    }
 
     const created = await prisma.lead.create({
       data: {
@@ -187,20 +231,88 @@ export async function POST(request: Request) {
         email: body.email ? String(body.email) : null,
         source: toDbSource(body.source as UiSource | undefined),
         category: toDbCategory(body.category as UiCategory | undefined),
-        stage: toDbStage(body.stage as UiStage | undefined),
+        stage: 'NEW',
         attempts: Number(body.attempts ?? 0),
         notes: body.notes ? String(body.notes) : null,
         lastContactAt: body.lastContact ? new Date(body.lastContact) : null,
-        nextFollowUpAt: body.nextFollowUp ? new Date(body.nextFollowUp) : null,
+        nextFollowUpAt: getNextFollowUpDate(0),
         metadata: {
-          whatsAppSent: body.whatsAppSent ?? true,
+          whatsAppSent: false,
           documents: body.documents ?? defaultDocuments,
         },
         organizationId,
       },
     })
 
-    return NextResponse.json(toUiLead(created), { status: 201 })
+    let leadForResponse = created
+
+    try {
+      const organization = await prisma.organization.findUnique({
+        where: { id: organizationId },
+      })
+
+      if (organization?.whatsappPhoneId && organization?.whatsappToken) {
+        const provider = getMessageProvider(organization)
+        const firstName = String(body.name).trim().split(' ')[0] ?? 'there'
+
+        const welcomeResult = await provider.sendMessage({
+          to: String(body.phone),
+          body: '',
+          templateId: WHATSAPP_TEMPLATES.WELCOME.name,
+          templateParams: {
+            '1': firstName,
+            '2': organization.name,
+          },
+        })
+
+        await prisma.message.create({
+          data: {
+            leadId: created.id,
+            channel: MessageChannel.WHATSAPP,
+            direction: MessageDirection.OUTBOUND,
+            status: welcomeResult.success ? 'SENT' : 'FAILED',
+            body: `Welcome template ${WHATSAPP_TEMPLATES.WELCOME.name}`,
+            templateId: WHATSAPP_TEMPLATES.WELCOME.name,
+            externalId: welcomeResult.externalId ?? null,
+          },
+        })
+
+        if (welcomeResult.success) {
+          const createdMetadata = (created.metadata ?? {}) as Record<string, unknown>
+          leadForResponse = await prisma.lead.update({
+            where: { id: created.id },
+            data: {
+              stage: 'CONTACTED',
+              attempts: 1,
+              lastContactAt: new Date(),
+              nextFollowUpAt: getNextFollowUpDate(1),
+              metadata: {
+                ...createdMetadata,
+                whatsAppSent: true,
+                documents:
+                  typeof createdMetadata.documents === 'object' &&
+                  createdMetadata.documents
+                    ? createdMetadata.documents
+                    : defaultDocuments,
+              },
+            },
+          })
+
+          await prisma.stageTransition.create({
+            data: {
+              leadId: created.id,
+              fromStage: 'NEW',
+              toStage: 'CONTACTED',
+              reason: 'auto_welcome_whatsapp',
+            },
+          })
+        }
+      }
+    } catch (welcomeError) {
+      console.error('Failed to send Meta welcome message:', welcomeError)
+    }
+
+    return NextResponse.json(toUiLead(leadForResponse), { status: 201 })
   } catch (error) {
     console.error('Failed to create lead:', error)
     return NextResponse.json({ error: 'Failed to create lead' }, { status: 500 })

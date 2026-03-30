@@ -1,24 +1,18 @@
 'use client'
 
-import { Plus, Radio, Upload, User, LogOut, Settings } from 'lucide-react'
+import { Plus, Radio, Upload, Settings } from 'lucide-react'
+import { UserButton } from '@clerk/nextjs'
 import { Button } from '@/components/ui/button'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { ThemeToggle } from '@/components/theme-toggle'
 
 interface HeaderProps {
   onNewLead: () => void
   onBroadcast: () => void
   onImport: () => void
+  onSettings: () => void
 }
 
-export function Header({ onNewLead, onBroadcast, onImport }: HeaderProps) {
+export function Header({ onNewLead, onBroadcast, onImport, onSettings }: HeaderProps) {
   return (
     <header className="flex items-center justify-between px-6 py-4 border-b border-border bg-card">
       <div className="flex items-center gap-2">
@@ -52,6 +46,15 @@ export function Header({ onNewLead, onBroadcast, onImport }: HeaderProps) {
           Broadcast
         </Button>
         <Button
+          variant="outline"
+          size="sm"
+          onClick={onSettings}
+          className="gap-2"
+        >
+          <Settings className="h-4 w-4" />
+          Settings
+        </Button>
+        <Button
           size="sm"
           onClick={onNewLead}
           className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
@@ -62,34 +65,17 @@ export function Header({ onNewLead, onBroadcast, onImport }: HeaderProps) {
 
         <ThemeToggle />
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="rounded-full">
-              <Avatar className="h-8 w-8">
-                <AvatarImage src="/placeholder-avatar.jpg" alt="User" />
-                <AvatarFallback className="bg-secondary text-secondary-foreground">
-                  AK
-                </AvatarFallback>
-              </Avatar>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem className="gap-2">
-              <User className="h-4 w-4" />
-              Profile
-            </DropdownMenuItem>
-            <DropdownMenuItem className="gap-2">
-              <Settings className="h-4 w-4" />
-              Settings
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem className="gap-2 text-destructive">
-              <LogOut className="h-4 w-4" />
-              Logout
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* Clerk UserButton — handles profile, account management, and sign-out */}
+        <UserButton
+          appearance={{
+            elements: {
+              avatarBox: 'h-8 w-8',
+              userButtonPopoverCard: 'border border-border shadow-lg',
+            },
+          }}
+        />
       </div>
     </header>
   )
 }
+
