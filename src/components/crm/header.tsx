@@ -16,9 +16,10 @@ interface HeaderProps {
   onNewLead: () => void
   onBroadcast: () => void
   onImport: () => void
+  onSettings: () => void
 }
 
-export function Header({ onNewLead, onBroadcast, onImport }: HeaderProps) {
+export function Header({ onNewLead, onBroadcast, onImport, onSettings }: HeaderProps) {
   return (
     <header className="flex items-center justify-between px-6 py-4 border-b border-border bg-card">
       <div className="flex items-center gap-2">
@@ -78,7 +79,7 @@ export function Header({ onNewLead, onBroadcast, onImport }: HeaderProps) {
               <User className="h-4 w-4" />
               Profile
             </DropdownMenuItem>
-            <DropdownMenuItem className="gap-2">
+            <DropdownMenuItem className="gap-2" onSelect={onSettings}>
               <Settings className="h-4 w-4" />
               Settings
             </DropdownMenuItem>

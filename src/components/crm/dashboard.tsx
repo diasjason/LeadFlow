@@ -12,6 +12,7 @@ import { AddLeadModal } from './add-lead-modal'
 import { LeadDetailModal } from './lead-detail-modal'
 import { BroadcastModal } from './broadcast-modal'
 import { ImportModal } from './import-modal'
+import { OrganizationSettingsModal } from './organization-settings-modal'
 import type { Lead } from '@/lib/types'
 
 type NewLeadInput = Omit<
@@ -81,6 +82,7 @@ export function Dashboard() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [broadcastOpen, setBroadcastOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const { data: leads = [], isLoading } = useQuery({
     queryKey: LEADS_QUERY_KEY,
@@ -157,6 +159,7 @@ export function Dashboard() {
         onNewLead={() => setAddLeadOpen(true)}
         onBroadcast={() => setBroadcastOpen(true)}
         onImport={() => setImportOpen(true)}
+        onSettings={() => setSettingsOpen(true)}
       />
 
       <StatsBar leads={leads} />
@@ -221,6 +224,11 @@ export function Dashboard() {
         open={importOpen}
         onOpenChange={setImportOpen}
         onImportComplete={handleImportComplete}
+      />
+
+      <OrganizationSettingsModal
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
       />
     </div>
   )
