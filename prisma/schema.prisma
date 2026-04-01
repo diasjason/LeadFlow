@@ -105,15 +105,26 @@ model Organization {
   whatsappBusinessId String?  // Meta WhatsApp Business Account ID
   whatsappPhoneId    String?  // Meta phone number ID for sending
   whatsappToken      String?  // Meta access token (encrypted at rest)
-  
+
+  // Vapi AI voice calling
+  vapiApiKey         String?  // Vapi private API key
+  vapiPhoneNumberId  String?  // Vapi outbound phone number ID
+  vapiAssistantId    String?  // Pre-built assistant ID (optional override)
+  vapiInboundNumber  String?  // Vapi inbound phone number (leads call this)
+
+  // Google Calendar (for booking site visits)
+  googleAccessToken  String?
+  googleRefreshToken String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  
+
   users     User[]
   leads     Lead[]
   broadcasts Broadcast[]
   importBatches ImportBatch[]
-  
+  calls     Call[]
+
   @@map("organizations")
 }
 
@@ -187,6 +198,7 @@ model Lead {
   followUps  FollowUp[]
   documents  Document[]
   stageHistory StageTransition[]
+  calls      Call[]
   
   // Indexes for common queries
   @@index([organizationId, stage])
@@ -329,6 +341,45 @@ model Broadcast {
   completedAt DateTime?
   
   @@map("broadcasts")
+}
+
+/// Call — AI voice call records (Vapi)
+model Call {
+  id              String   @id @default(cuid())
+
+  // Vapi tracking
+  vapiCallId      String   @unique
+  status          String   @default("queued") // queued | ringing | in-progress | ended
+  direction       String   @default("outbound") // outbound | inbound
+  endedReason     String?
+
+  // Call data
+  duration        Int      @default(0)   // seconds
+  cost            Float    @default(0)   // USD
+  assistantType   String?  // "lead_qualifier" | "follow_up"
+
+  // Transcript + Analysis
+  transcript      String?
+  summary         String?
+  successEvaluation String?
+  structuredData  Json?
+  recordingUrl    String?
+
+  // Relationships
+  leadId          String
+  lead            Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+
+  createdAt       DateTime @default(now())
+  startedAt       DateTime?
+  endedAt         DateTime?
+
+  @@index([leadId])
+  @@index([vapiCallId])
+  @@index([organizationId, createdAt])
+  @@map("calls")
 }
 
 /// ImportBatch — tracks each Excel/CSV import for audit trail

@@ -268,7 +268,7 @@ export const sampleLeads: Lead[] = [
     phone: '+91 87123 45678',
     email: 'neha.verma@company.com',
     source: 'referral',
-    category: 'lost',
+    category: 'cold',
     stage: 'lost',
     attempts: 3,
     lastContact: new Date('2024-01-05'),

@@ -37,9 +37,10 @@ export class VapiProvider {
   private apiKey: string
 
   constructor(apiKey?: string) {
-    this.apiKey = apiKey ?? process.env.VAPI_API_KEY ?? ''
+    this.apiKey =
+      apiKey ?? process.env.VAPI_PRIVATE_KEY ?? process.env.VAPI_API_KEY ?? ''
     if (!this.apiKey) {
-      throw new Error('VAPI_API_KEY is not configured')
+      throw new Error('Vapi private API key is not configured (set VAPI_PRIVATE_KEY or VAPI_API_KEY)')
     }
   }
 
@@ -53,41 +54,68 @@ export class VapiProvider {
     toPhone: string
     assistantConfig: VapiAssistantConfig
     metadata?: Record<string, string>
+    serverBaseUrl?: string
   }): Promise<CallResult> {
     try {
-      const { toPhone, assistantConfig, metadata } = params
+      const { toPhone, assistantConfig, metadata, serverBaseUrl } = params
 
       const normalizedPhone = this.normalizePhone(toPhone)
+      const phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID
+      const assistantId = process.env.VAPI_ASSISTANT_ID
+      const resolvedServerBaseUrl =
+        serverBaseUrl ?? process.env.NEXT_PUBLIC_BASE_URL ?? ''
+
+      if (!phoneNumberId) {
+        return {
+          success: false,
+          error: 'VAPI_PHONE_NUMBER_ID is not configured',
+        }
+      }
+
+      if (!resolvedServerBaseUrl) {
+        return {
+          success: false,
+          error: 'Missing server base URL for Vapi webhook callback',
+        }
+      }
 
       const payload = {
         type: 'outboundPhoneCall',
-        phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID,
+        phoneNumberId,
         customer: {
           number: normalizedPhone,
         },
-        assistant: {
-          name: assistantConfig.name,
-          model: {
-            provider: assistantConfig.model.provider,
-            model: assistantConfig.model.model,
-            temperature: assistantConfig.model.temperature,
-            // Vapi uses messages[] for the system prompt — not a top-level systemPrompt field
-            messages: [
-              {
-                role: 'system',
-                content: assistantConfig.model.systemPrompt,
+        ...(assistantId
+          ? {
+              assistantId,
+            }
+          : {
+              assistant: {
+                name: assistantConfig.name,
+                model: {
+                  provider: assistantConfig.model.provider,
+                  model: assistantConfig.model.model,
+                  temperature: assistantConfig.model.temperature,
+                  // Vapi uses messages[] for the system prompt — not a top-level systemPrompt field
+                  messages: [
+                    {
+                      role: 'system',
+                      content: assistantConfig.model.systemPrompt,
+                    },
+                  ],
+                },
+                voice: assistantConfig.voice,
+                firstMessage: assistantConfig.firstMessage,
+                endCallMessage: assistantConfig.endCallMessage,
+                maxDurationSeconds: assistantConfig.maxDurationSeconds,
+                tools: assistantConfig.tools,
+                server: {
+                  // Send end-of-call report and tool calls to our webhook
+                  url: `${resolvedServerBaseUrl}/api/vapi/webhook`,
+                  secret: process.env.VAPI_WEBHOOK_SECRET,
+                },
               },
-            ],
-          },
-          voice: assistantConfig.voice,
-          firstMessage: assistantConfig.firstMessage,
-          endCallMessage: assistantConfig.endCallMessage,
-          maxDurationSeconds: assistantConfig.maxDurationSeconds,
-          tools: assistantConfig.tools,
-          // Send end-of-call report to our webhook
-          serverUrl: `${process.env.NEXT_PUBLIC_BASE_URL}/api/vapi/webhook`,
-          serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET,
-        },
+            }),
         metadata,
       }
 
@@ -100,20 +128,74 @@ export class VapiProvider {
         body: JSON.stringify(payload),
       })
 
-      const data = await response.json()
+      const rawBody = await response.text()
+      let data: unknown = null
+      try {
+        data = rawBody ? JSON.parse(rawBody) : null
+      } catch {
+        data = rawBody
+      }
 
       if (!response.ok) {
         console.error('[vapi] makeCall failed:', data)
+        const responseObject =
+          data && typeof data === 'object' ? (data as Record<string, unknown>) : undefined
+        const rawMessage =
+          (typeof responseObject?.message === 'string' ? responseObject.message : undefined) ??
+          (typeof responseObject?.error === 'string' ? responseObject.error : undefined)
+        const normalizedMessage = rawMessage?.toLowerCase() ?? ''
+        const isKeyTypeMismatch =
+          normalizedMessage.includes('invalid key') ||
+          normalizedMessage.includes('private key') ||
+          normalizedMessage.includes('public key')
+        const detail = (() => {
+          if (typeof data === 'string' && data.trim().length > 0) {
+            return data
+          }
+          if (responseObject && typeof responseObject === 'object') {
+            const issues = responseObject.issues
+            if (Array.isArray(issues) && issues.length > 0) {
+              return issues
+                .map((issue) => {
+                  if (issue && typeof issue === 'object') {
+                    const issueObj = issue as Record<string, unknown>
+                    const path = Array.isArray(issueObj.path)
+                      ? issueObj.path.join('.')
+                      : undefined
+                    const message =
+                      typeof issueObj.message === 'string'
+                        ? issueObj.message
+                        : JSON.stringify(issueObj)
+                    return path ? `${path}: ${message}` : message
+                  }
+                  return String(issue)
+                })
+                .join('; ')
+            }
+            return JSON.stringify(responseObject)
+          }
+          return undefined
+        })()
+
         return {
           success: false,
-          error: data.message ?? `Vapi API error: ${response.status}`,
+          error: isKeyTypeMismatch
+            ? 'Invalid Vapi key for server call. Set VAPI_PRIVATE_KEY (or VAPI_API_KEY) to your Vapi private key. Do not use the public key here.'
+            : rawMessage ??
+              detail ??
+              `Vapi API error: ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`,
         }
       }
 
-      console.log(`[vapi] Call initiated: ${data.id} → ${normalizedPhone}`)
+      const callId =
+        data && typeof data === 'object' && typeof (data as Record<string, unknown>).id === 'string'
+          ? (data as Record<string, unknown>).id
+          : undefined
+
+      console.log(`[vapi] Call initiated: ${callId ?? 'unknown-id'} → ${normalizedPhone}`)
       return {
         success: true,
-        callId: data.id,
+        callId: callId as string | undefined,
       }
     } catch (error) {
       console.error('[vapi] makeCall exception:', error)
@@ -171,12 +253,22 @@ export class VapiProvider {
   // ─── Helpers ────────────────────────────────
 
   private normalizePhone(phone: string): string {
-    let cleaned = phone.replace(/\D/g, '')
-    // Indian numbers: add +91 if not present
-    if (cleaned.length === 10) {
-      cleaned = '91' + cleaned
+    let cleaned = phone.trim().replace(/\D/g, '')
+
+    // Convert 00-prefixed international format (e.g., 001234...) to E.164 digits
+    if (cleaned.startsWith('00')) {
+      cleaned = cleaned.slice(2)
     }
-    return '+' + cleaned
+
+    // If local 10-digit number is provided, assume a default country code.
+    // Defaults to US/CA (+1) unless overridden via env.
+    if (cleaned.length === 10) {
+      const defaultCountryCode =
+        (process.env.VAPI_DEFAULT_COUNTRY_CODE ?? '1').replace(/\D/g, '') || '1'
+      cleaned = `${defaultCountryCode}${cleaned}`
+    }
+
+    return `+${cleaned}`
   }
 }
 

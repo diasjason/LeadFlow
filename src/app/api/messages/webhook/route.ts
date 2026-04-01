@@ -1,12 +1,18 @@
 // src/app/api/messages/webhook/route.ts
 // ─────────────────────────────────────────────
-// WHATSAPP WEBHOOK — v2 with Vapi integration
+// WHATSAPP WEBHOOK — v3 with inbound call flow
 //
-// Flow:
-//   Customer replies → message saved → AI analyzes intent
-//   → If interested: lead → HOT/INTERESTED, Vapi call triggered
-//   → If not interested: lead → COLD
-//   → Existing reactivation & button logic preserved
+// Flow (new leads):
+//   Customer replies → AI detects interest
+//   → Send "CALL NOW" WhatsApp message with Vapi inbound number
+//   → Set callNowSentAt timestamp
+//   → If lead doesn't call within 30 min → cron triggers outbound
+//
+// Flow (old leads / button taps):
+//   Explicit interest button → promote + immediate outbound call
+//
+// Reactivation:
+//   CLOSED_LOST replies → re-stage → same flow
 // ─────────────────────────────────────────────
 
 import { MessageChannel, MessageDirection, MessageStatus } from '@prisma/client'
@@ -16,6 +22,7 @@ import { reactivateLead } from '@/lib/workflow/engine'
 import { detectIntent } from '@/lib/vapi/ai-intent-detector'
 import { buildRealEstateAssistant } from '@/lib/vapi/vapi-assistant-templates'
 import { getVapiProvider } from '@/lib/vapi/vapi-provider'
+import { getMessageProvider } from '@/lib/messaging/provider'
 
 export async function GET(request: NextRequest) {
   const mode = request.nextUrl.searchParams.get('hub.mode')
@@ -154,7 +161,7 @@ async function handleIncomingMessage(
     return
   }
 
-  // Explicit interest via button → fast track to Vapi call
+  // Explicit interest via button → fast track to inbound/outbound call
   const isExplicitInterest =
     buttonText.includes('schedule') ||
     buttonText.includes('visit') ||
@@ -162,7 +169,11 @@ async function handleIncomingMessage(
 
   if (isExplicitInterest) {
     await promoteToInterested(lead.id, lead.stage)
-    await triggerVapiCall({ lead, organization, body, messageBody: body })
+    await sendCallNowOrOutbound({
+      lead: { ...lead, metadata: (lead.metadata ?? null) as Record<string, unknown> | null },
+      organization,
+      body,
+    })
     return
   }
 
@@ -232,13 +243,12 @@ async function handleIncomingMessage(
     // Promote to INTERESTED + HOT
     await promoteToInterested(lead.id, lead.stage)
 
-    // Trigger Vapi call — pass freshExtractedData directly (not stale existingMetadata)
+    // Send CALL NOW message (inbound first) or fall back to outbound
     if (intent.shouldTriggerCall) {
-      await triggerVapiCall({
-        lead,
+      await sendCallNowOrOutbound({
+        lead: { ...lead, metadata: (lead.metadata ?? null) as Record<string, unknown> | null },
         organization,
         body,
-        messageBody: body,
         extractedData: freshExtractedData,
       })
     }
@@ -270,20 +280,124 @@ async function promoteToInterested(leadId: string, currentStage: string) {
   ])
 }
 
-async function triggerVapiCall(params: {
+// ─── Inbound-first call strategy ─────────────
+//
+// 1. If org has a Vapi inbound number → send "CALL NOW" WhatsApp
+//    and store callNowSentAt. Cron will trigger outbound after 30 min
+//    if the lead hasn't called in.
+//
+// 2. If no inbound number configured → trigger outbound call immediately.
+
+async function sendCallNowOrOutbound(params: {
   lead: {
     id: string
     name: string
     phone: string
-    metadata?: Record<string, unknown>
+    metadata?: Record<string, unknown> | null
   }
-  organization: { name: string }
+  organization: {
+    id?: string
+    name: string
+    whatsappPhoneId?: string | null
+    whatsappToken?: string | null
+  }
   body: string
-  messageBody: string
   extractedData?: {
     propertyType?: string
     location?: string
   }
+}) {
+  const { lead, organization, extractedData } = params
+
+  // Fetch org with Vapi inbound number
+  const orgId = (organization as { id?: string }).id
+  const fullOrg = orgId
+    ? await prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { vapiInboundNumber: true },
+      })
+    : null
+
+  const vapiInboundNumber = fullOrg?.vapiInboundNumber ?? null
+
+  if (vapiInboundNumber && organization.whatsappPhoneId && organization.whatsappToken) {
+    // ── Strategy A: Send CALL NOW message, wait for inbound ──
+    await sendCallNowMessage({
+      lead,
+      organization: organization as Parameters<typeof sendCallNowMessage>[0]['organization'],
+      vapiInboundNumber,
+      extractedData,
+    })
+  } else {
+    // ── Strategy B: No inbound number → immediate outbound ──
+    await triggerOutboundCall({ lead, organization, extractedData })
+  }
+}
+
+async function sendCallNowMessage(params: {
+  lead: { id: string; name: string; phone: string; metadata?: Record<string, unknown> | null }
+  organization: { name: string; whatsappPhoneId: string; whatsappToken: string }
+  vapiInboundNumber: string
+  extractedData?: { propertyType?: string; location?: string }
+}) {
+  const { lead, organization, vapiInboundNumber, extractedData } = params
+  const firstName = lead.name.split(' ')[0]
+
+  const meta = (lead.metadata ?? {}) as Record<string, unknown>
+  const propertyHint =
+    (extractedData?.propertyType ?? (meta.propertyType as string | undefined))
+      ? `for a ${extractedData?.propertyType ?? meta.propertyType}`
+      : ''
+
+  const msg =
+    `Hi ${firstName}! Great to hear you're interested ${propertyHint} 🏠\n\n` +
+    `Our property advisor is ready to speak with you right now.\n\n` +
+    `📞 *Tap to call us:* ${vapiInboundNumber}\n\n` +
+    `Or we'll call you within 30 minutes. Just stay tuned! ⏰`
+
+  try {
+    const provider = getMessageProvider(organization)
+    const result = await provider.sendMessage({ to: lead.phone, body: msg })
+
+    if (result.success) {
+      // Store callNowSentAt so cron can trigger outbound after 30 min
+      const existingMetadata = (lead.metadata ?? {}) as Record<string, unknown>
+      await prisma.lead.update({
+        where: { id: lead.id },
+        data: {
+          metadata: {
+            ...existingMetadata,
+            callNowSentAt: new Date().toISOString(),
+            ...(extractedData?.propertyType ? { propertyType: extractedData.propertyType } : {}),
+            ...(extractedData?.location ? { location: extractedData.location } : {}),
+          },
+        },
+      })
+
+      await prisma.message.create({
+        data: {
+          leadId: lead.id,
+          channel: MessageChannel.WHATSAPP,
+          direction: MessageDirection.OUTBOUND,
+          status: MessageStatus.SENT,
+          body: msg,
+          externalId: result.externalId ?? null,
+        },
+      })
+
+      console.log(`[webhook] CALL NOW message sent to lead ${lead.id}`)
+    }
+  } catch (err) {
+    console.error('[webhook] Failed to send CALL NOW message:', err)
+    // Fall back to outbound
+    await triggerOutboundCall({ lead, organization, extractedData })
+  }
+}
+
+async function triggerOutboundCall(params: {
+  lead: { id: string; name: string; phone: string; metadata?: Record<string, unknown> | null }
+  organization: { name: string }
+  extractedData?: { propertyType?: string; location?: string }
 }) {
   const { lead, organization, extractedData } = params
 
@@ -295,7 +409,7 @@ async function triggerVapiCall(params: {
 
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
   if (!baseUrl) {
-    console.error('[webhook] NEXT_PUBLIC_BASE_URL not set — cannot build Vapi tools URL')
+    console.error('[webhook] NEXT_PUBLIC_BASE_URL not set — cannot trigger outbound call')
     return
   }
 
@@ -313,29 +427,26 @@ async function triggerVapiCall(params: {
     const result = await vapi.makeCall({
       toPhone: lead.phone,
       assistantConfig,
-      metadata: {
-        leadId: lead.id,
-        orgName: organization.name,
-      },
+      metadata: { leadId: lead.id, orgName: organization.name },
     })
 
     if (result.success) {
-      console.log(`[webhook] Vapi call initiated: ${result.callId} → lead ${lead.id}`)
+      console.log(`[webhook] Outbound call initiated: ${result.callId} → lead ${lead.id}`)
       await prisma.message.create({
         data: {
           leadId: lead.id,
           channel: MessageChannel.PHONE,
           direction: MessageDirection.OUTBOUND,
           status: MessageStatus.SENT,
-          body: `📞 AI call initiated (Vapi call ID: ${result.callId})`,
+          body: `📞 AI outbound call initiated (Vapi call ID: ${result.callId})`,
           externalId: result.callId ?? null,
         },
       })
     } else {
-      console.error(`[webhook] Vapi call failed for lead ${lead.id}:`, result.error)
+      console.error(`[webhook] Outbound call failed for lead ${lead.id}:`, result.error)
     }
   } catch (err) {
-    console.error('[webhook] Vapi call exception:', err)
+    console.error('[webhook] Outbound call exception:', err)
   }
 }
 

@@ -5,6 +5,13 @@ export const WHATSAPP_TEMPLATES = {
     language: 'en',
     body: "Hi {{1}}! Thank you for your interest in {{2}}. We received your inquiry and a team member will be in touch shortly.",
   },
+  VISIT_CONFIRMED: {
+    name: 'visit_confirmed_v1',
+    category: 'UTILITY',
+    language: 'en',
+    // {{1}} = first name, {{2}} = date, {{3}} = time, {{4}} = property/org
+    body: "Hi {{1}}! ✅ Your site visit is confirmed for {{2}} at {{3}}. Our team will meet you at {{4}}. See you there! 🏡",
+  },
   FOLLOWUP_1: {
     name: 'followup_day1_v1',
     category: 'MARKETING',
