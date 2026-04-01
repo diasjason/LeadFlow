@@ -16,6 +16,8 @@ const isPublicRoute = createRouteMatcher([
   '/sign-up(.*)',
   '/api/messages/webhook(.*)',  // WhatsApp — has its own verify token
   '/api/vapi/webhook(.*)',      // Vapi — has its own secret header
+  '/api/cron/(.*)',             // Cron — secured by CRON_SECRET bearer token
+  '/api/auth/google(.*)',       // Google OAuth flow
 ])
 
 export default clerkMiddleware(async (auth, request) => {
