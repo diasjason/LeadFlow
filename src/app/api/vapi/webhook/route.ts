@@ -322,6 +322,8 @@ async function updateLeadStatus(args: {
   property_type?: string
   location?: string
   budget?: string
+  callback_requested?: string
+  escalation_requested?: string
 }) {
   const lead = await prisma.lead.findUnique({ where: { id: args.lead_id } })
   if (!lead) return { success: false, error: 'Lead not found' }
@@ -341,6 +343,8 @@ async function updateLeadStatus(args: {
           ...(args.property_type ? { propertyType: args.property_type } : {}),
           ...(args.location ? { location: args.location } : {}),
           ...(args.budget ? { budget: args.budget } : {}),
+          ...(args.callback_requested ? { callbackRequested: args.callback_requested } : {}),
+          ...(args.escalation_requested ? { escalationRequested: args.escalation_requested } : {}),
         },
       },
     }),

@@ -251,7 +251,11 @@ export async function POST(request: Request) {
         where: { id: organizationId },
       })
 
-      if (organization?.whatsappPhoneId && organization?.whatsappToken) {
+      const hasWhatsApp =
+        (organization?.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID) &&
+        (organization?.whatsappToken || process.env.WHATSAPP_ACCESS_TOKEN)
+
+      if (organization && hasWhatsApp) {
         const provider = getMessageProvider(organization)
         const firstName = String(body.name).trim().split(' ')[0] ?? 'there'
 

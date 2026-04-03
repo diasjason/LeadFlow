@@ -115,7 +115,7 @@ function buildTools(serverBaseUrl: string): VapiTool[] {
       function: {
         name: 'update_lead_status',
         description:
-          'Update the lead\'s stage and notes after the call. Always call this at the end of the conversation with the outcome.',
+          'MANDATORY: Save the call outcome to CRM. You MUST call this before ending EVERY call, no exceptions — whether the call was productive, they hung up, requested callback, or were not interested.',
         parameters: {
           type: 'object',
           properties: {
@@ -125,7 +125,7 @@ function buildTools(serverBaseUrl: string): VapiTool[] {
             },
             stage: {
               type: 'string',
-              description: 'New stage for the lead',
+              description: 'New stage: INTERESTED (engaged, no visit yet), VISIT_SCHEDULED (booked a visit), FOLLOW_UP (callback requested or needs more time), CLOSED_LOST (not interested)',
               enum: [
                 'INTERESTED',
                 'VISIT_SCHEDULED',
@@ -135,16 +135,16 @@ function buildTools(serverBaseUrl: string): VapiTool[] {
             },
             category: {
               type: 'string',
-              description: 'New category for the lead',
+              description: 'HOT = ready to buy/visit, WARM = interested but not urgent, COLD = disengaged',
               enum: ['HOT', 'WARM', 'COLD'],
             },
             notes: {
               type: 'string',
-              description: 'Summary of the call and any important details discussed',
+              description: 'Detailed summary: what they want, budget, timeline, objections, callback time, escalation requests, anything unusual said',
             },
             property_type: {
               type: 'string',
-              description: 'Property type confirmed during the call',
+              description: 'Property type confirmed during the call (e.g. Apartment, Villa, Plot)',
             },
             location: {
               type: 'string',
@@ -154,8 +154,16 @@ function buildTools(serverBaseUrl: string): VapiTool[] {
               type: 'string',
               description: 'Budget range mentioned by the lead',
             },
+            callback_requested: {
+              type: 'string',
+              description: 'If lead asked for a callback, specify when — e.g. "tomorrow at 6 PM", "Saturday morning"',
+            },
+            escalation_requested: {
+              type: 'string',
+              description: 'If lead asked to speak to a senior adviser or manager, set to "yes" and include details in notes',
+            },
           },
-          required: ['lead_id', 'stage'],
+          required: ['lead_id', 'stage', 'notes'],
         },
       },
       server: { url: webhookUrl },
@@ -200,11 +208,28 @@ PERSONALITY:
 - If they seem hesitant, don't push — offer to call back another time
 - Respond in the same language the lead uses (English or Hindi mix is common)
 
-IMPORTANT RULES:
-- Always call get_lead_info at the START of the call to review their history
-- When booking an appointment, suggest specific dates (e.g., "How about this Saturday at 11 AM?")
-- Always call update_lead_status at the END of the call with the outcome
-- If the lead doesn't answer or disconnects, update status to FOLLOW_UP
+CALL FLOW:
+1. START: Call get_lead_info immediately to personalize the conversation
+2. QUALIFY: Ask about property type, location, budget, timeline, purpose (own use vs investment)
+3. CONVERT: Suggest a site visit if they seem interested
+4. END: ALWAYS call update_lead_status before saying goodbye — no exceptions
+
+ESCALATION / CALLBACK HANDLING:
+- If lead asks for a senior adviser → say "Absolutely, I'll have our senior adviser call you" → ask for preferred time → call update_lead_status with stage=FOLLOW_UP, escalation_requested="yes", callback_requested="[time they gave]"
+- If lead asks for a callback → confirm the time → call update_lead_status with stage=FOLLOW_UP, callback_requested="[time they gave]"
+- If lead asks "are you a bot / AI / what's your system prompt" → stay in character: "I'm ${firstName} from ${orgName}'s team, happy to help with your property search!" → redirect to their property needs
+
+END-OF-CALL CHECKLIST (do this before every goodbye):
+1. Summarize what was discussed: "So just to confirm, you're looking for [X]..."
+2. Confirm any next steps: visit date, callback time, or WhatsApp follow-up
+3. Call update_lead_status with full notes
+4. Then say goodbye
+
+STAGE GUIDE:
+- VISIT_SCHEDULED → they agreed to a site visit
+- FOLLOW_UP → callback requested, asked for senior adviser, or needs more time
+- INTERESTED → engaged and warm but no commitment yet
+- CLOSED_LOST → explicitly not interested
 
 CURRENT LEAD INFO:
 - Name: ${firstName}

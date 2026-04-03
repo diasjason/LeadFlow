@@ -67,8 +67,8 @@ export function OrganizationSettingsModal({
         setName(data.name ?? '')
         setWhatsappPhoneId(data.whatsappPhoneId ?? '')
         setWhatsappBusinessId(data.whatsappBusinessId ?? '')
-        setWhatsappToken(data.whatsappToken ?? '')
-        setVapiApiKey(data.vapiApiKey ?? '')
+        setWhatsappToken(data.whatsappToken === '••••••••' ? '' : (data.whatsappToken ?? ''))
+        setVapiApiKey(data.vapiApiKey === '••••••••' ? '' : (data.vapiApiKey ?? ''))
         setVapiPhoneNumberId(data.vapiPhoneNumberId ?? '')
         setVapiAssistantId(data.vapiAssistantId ?? '')
         setVapiInboundNumber(data.vapiInboundNumber ?? '')
@@ -175,7 +175,7 @@ export function OrganizationSettingsModal({
                     type="password"
                     value={whatsappToken}
                     onChange={(e) => setWhatsappToken(e.target.value)}
-                    placeholder="Permanent access token"
+                    placeholder={settings?.whatsappToken ? '(saved — paste new to change)' : 'Permanent access token'}
                     className="bg-secondary border-border"
                   />
                 </Field>
@@ -198,7 +198,7 @@ export function OrganizationSettingsModal({
                     type="password"
                     value={vapiApiKey}
                     onChange={(e) => setVapiApiKey(e.target.value)}
-                    placeholder="vapi_••••••••"
+                    placeholder={settings?.vapiApiKey ? '(saved — paste new to change)' : 'Vapi private API key'}
                     className="bg-secondary border-border"
                   />
                 </Field>

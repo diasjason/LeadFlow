@@ -75,9 +75,11 @@ export async function PUT(request: NextRequest) {
         whatsappBusinessId: body.whatsappBusinessId
           ? String(body.whatsappBusinessId).trim()
           : null,
-        ...(isMasked(body.whatsappToken)
+        ...(!isMasked(body.whatsappToken)
+          ? { whatsappToken: body.whatsappToken ? String(body.whatsappToken).trim() : null }
+          : organization.whatsappToken
           ? {}
-          : { whatsappToken: body.whatsappToken ? String(body.whatsappToken).trim() : null }),
+          : { whatsappToken: null }),
         // Vapi
         vapiPhoneNumberId: body.vapiPhoneNumberId
           ? String(body.vapiPhoneNumberId).trim()
@@ -88,9 +90,11 @@ export async function PUT(request: NextRequest) {
         vapiInboundNumber: body.vapiInboundNumber
           ? String(body.vapiInboundNumber).trim()
           : null,
-        ...(isMasked(body.vapiApiKey)
+        ...(!isMasked(body.vapiApiKey)
+          ? { vapiApiKey: body.vapiApiKey ? String(body.vapiApiKey).trim() : null }
+          : organization.vapiApiKey
           ? {}
-          : { vapiApiKey: body.vapiApiKey ? String(body.vapiApiKey).trim() : null }),
+          : { vapiApiKey: null }),
       },
       select: ORG_SELECT,
     })

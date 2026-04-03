@@ -79,6 +79,13 @@ export class VapiProvider {
         }
       }
 
+      const serverConfig = {
+        url: `${resolvedServerBaseUrl}/api/vapi/webhook`,
+        ...(process.env.VAPI_WEBHOOK_SECRET
+          ? { secret: process.env.VAPI_WEBHOOK_SECRET }
+          : {}),
+      }
+
       const payload = {
         type: 'outboundPhoneCall',
         phoneNumberId,
@@ -88,6 +95,10 @@ export class VapiProvider {
         ...(assistantId
           ? {
               assistantId,
+              // Always override server URL so end-of-call reports reach our webhook
+              assistantOverrides: {
+                server: serverConfig,
+              },
             }
           : {
               assistant: {
@@ -109,11 +120,7 @@ export class VapiProvider {
                 endCallMessage: assistantConfig.endCallMessage,
                 maxDurationSeconds: assistantConfig.maxDurationSeconds,
                 tools: assistantConfig.tools,
-                server: {
-                  // Send end-of-call report and tool calls to our webhook
-                  url: `${resolvedServerBaseUrl}/api/vapi/webhook`,
-                  secret: process.env.VAPI_WEBHOOK_SECRET,
-                },
+                server: serverConfig,
               },
             }),
         metadata,

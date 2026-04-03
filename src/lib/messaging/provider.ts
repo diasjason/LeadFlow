@@ -31,10 +31,14 @@ export function getMessageProvider(org: {
   // twilioToken?: string | null;
 }): MessageProvider {
   // India market: WhatsApp is primary
-  if (org.whatsappPhoneId && org.whatsappToken) {
+  // Falls back to env vars if DB fields not set (useful for dev/testing)
+  const phoneNumberId = org.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID || ""
+  const accessToken = org.whatsappToken || process.env.WHATSAPP_ACCESS_TOKEN || ""
+
+  if (phoneNumberId && accessToken) {
     return new WhatsAppProvider({
-      phoneNumberId: org.whatsappPhoneId,
-      accessToken: org.whatsappToken,
+      phoneNumberId,
+      accessToken,
       webhookVerifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || "",
       businessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || "",
     });
