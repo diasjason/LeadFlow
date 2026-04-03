@@ -17,6 +17,7 @@ export interface Lead {
   id: string
   name: string
   phone: string
+  additionalPhones?: string[]  // stored in metadata.additionalPhones
   email?: string
   source: Source
   category: Category

@@ -126,10 +126,15 @@ function toUiLead(lead: Lead) {
       ? { ...defaultDocuments, ...(metadata.documents as Record<string, boolean>) }
       : defaultDocuments
 
+  const additionalPhones = Array.isArray(metadata.additionalPhones)
+    ? (metadata.additionalPhones as string[]).filter(Boolean)
+    : []
+
   return {
     id: lead.id,
     name: lead.name,
     phone: lead.phone,
+    additionalPhones,
     email: lead.email ?? undefined,
     source: toUiSource(lead.source),
     category: toUiCategory(lead.category),
