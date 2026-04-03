@@ -19,8 +19,67 @@ import { LeadCard } from './lead-card'
 import type { Lead, Stage } from '@/lib/types'
 import { STAGES } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { useIsMobile } from '@/hooks/use-mobile'
 
-// ─── Draggable card ───────────────────────────
+interface PipelineViewProps {
+  leads: Lead[]
+  onLeadClick: (lead: Lead) => void
+  onMoveLead: (leadId: string, newStage: Stage) => Promise<void>
+}
+
+// ─── Mobile: stage tabs ───────────────────────
+
+function MobilePipelineView({ leads, onLeadClick }: Omit<PipelineViewProps, 'onMoveLead'>) {
+  const [activeStage, setActiveStage] = useState<Stage>(STAGES[0].id)
+  const stageLeads = leads.filter((l) => l.stage === activeStage)
+
+  return (
+    <div className="flex flex-col flex-1 overflow-hidden">
+      {/* Stage tab bar */}
+      <div className="flex gap-2 px-3 py-2 overflow-x-auto border-b border-border shrink-0 scrollbar-none">
+        {STAGES.map((stage) => {
+          const count = leads.filter((l) => l.stage === stage.id).length
+          const isActive = stage.id === activeStage
+          return (
+            <button
+              key={stage.id}
+              onClick={() => setActiveStage(stage.id)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors shrink-0',
+                isActive
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-secondary text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {stage.label}
+              <span
+                className={cn(
+                  'flex items-center justify-center rounded-full w-4 h-4 text-[10px] font-semibold',
+                  isActive ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-muted-foreground/20'
+                )}
+              >
+                {count}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Lead list */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+        {stageLeads.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-16">No leads in this stage</p>
+        ) : (
+          stageLeads.map((lead) => (
+            <LeadCard key={lead.id} lead={lead} onClick={onLeadClick} />
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Desktop: draggable card ──────────────────
 
 function DraggableCard({ lead, onClick }: { lead: Lead; onClick: (lead: Lead) => void }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -29,18 +88,13 @@ function DraggableCard({ lead, onClick }: { lead: Lead; onClick: (lead: Lead) =>
   })
 
   return (
-    <div
-      ref={setNodeRef}
-      {...listeners}
-      {...attributes}
-      className={cn('touch-none', isDragging && 'opacity-30')}
-    >
+    <div ref={setNodeRef} {...listeners} {...attributes} className={cn('touch-none', isDragging && 'opacity-30')}>
       <LeadCard lead={lead} onClick={onClick} />
     </div>
   )
 }
 
-// ─── Droppable column ─────────────────────────
+// ─── Desktop: droppable column ────────────────
 
 function Column({
   stage,
@@ -72,9 +126,7 @@ function Column({
         className="flex-1 p-2 space-y-2 max-h-[calc(100vh-340px)] overflow-y-auto"
       >
         {leads.length === 0 ? (
-          <p className="text-sm text-muted-foreground text-center py-8 select-none">
-            Drop here
-          </p>
+          <p className="text-sm text-muted-foreground text-center py-8 select-none">Drop here</p>
         ) : (
           leads.map((lead) => (
             <DraggableCard key={lead.id} lead={lead} onClick={onLeadClick} />
@@ -85,52 +137,34 @@ function Column({
   )
 }
 
-// ─── Pipeline view ────────────────────────────
+// ─── Desktop: drag-and-drop swim lanes ────────
 
-interface PipelineViewProps {
-  leads: Lead[]
-  onLeadClick: (lead: Lead) => void
-  onMoveLead: (leadId: string, newStage: Stage) => Promise<void>
-}
-
-export function PipelineView({ leads, onLeadClick, onMoveLead }: PipelineViewProps) {
+function DesktopPipelineView({ leads, onLeadClick, onMoveLead }: PipelineViewProps) {
   const [activeLead, setActiveLead] = useState<Lead | null>(null)
 
   const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 6 }, // small threshold so clicks still work
-    }),
-    useSensor(TouchSensor, {
-      activationConstraint: { delay: 200, tolerance: 6 },
-    })
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } })
   )
 
   const handleDragStart = ({ active }: DragStartEvent) => {
-    const lead = (active.data.current as { lead: Lead }).lead
-    setActiveLead(lead)
+    setActiveLead((active.data.current as { lead: Lead }).lead)
   }
 
   const handleDragEnd = async ({ active, over }: DragEndEvent) => {
     setActiveLead(null)
     if (!over) return
-
-    const leadId = active.id as string
+    const lead = leads.find((l) => l.id === active.id)
     const newStage = over.id as Stage
-    const lead = leads.find((l) => l.id === leadId)
-
-    if (lead && lead.stage !== newStage) {
-      await onMoveLead(leadId, newStage)
-    }
+    if (lead && lead.stage !== newStage) await onMoveLead(lead.id, newStage)
   }
-
-  const handleDragCancel = () => setActiveLead(null)
 
   return (
     <DndContext
       sensors={sensors}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onDragCancel={handleDragCancel}
+      onDragCancel={() => setActiveLead(null)}
     >
       <ScrollArea className="flex-1 w-full">
         <div className="flex gap-4 p-6 min-w-max">
@@ -146,7 +180,6 @@ export function PipelineView({ leads, onLeadClick, onMoveLead }: PipelineViewPro
         <ScrollBar orientation="horizontal" />
       </ScrollArea>
 
-      {/* Floating card shown while dragging */}
       <DragOverlay dropAnimation={null}>
         {activeLead && (
           <div className="w-[272px] rotate-1 opacity-95 shadow-xl">
@@ -156,4 +189,16 @@ export function PipelineView({ leads, onLeadClick, onMoveLead }: PipelineViewPro
       </DragOverlay>
     </DndContext>
   )
+}
+
+// ─── Entry point ──────────────────────────────
+
+export function PipelineView(props: PipelineViewProps) {
+  const isMobile = useIsMobile()
+
+  if (isMobile) {
+    return <MobilePipelineView leads={props.leads} onLeadClick={props.onLeadClick} />
+  }
+
+  return <DesktopPipelineView {...props} />
 }

@@ -193,3 +193,12 @@
   .ring-ring { --tw-ring-color: var(--ring) !important; }
   .ring-primary { --tw-ring-color: var(--primary) !important; }
 }
+
+/* Hide scrollbar while keeping scroll functionality */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
