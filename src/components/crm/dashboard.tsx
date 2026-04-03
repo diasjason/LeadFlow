@@ -185,7 +185,11 @@ export function Dashboard() {
           <div className="px-4 py-2 text-sm text-hot">Unable to persist latest change. Please retry.</div>
         )}
         {!isLoading && viewMode === 'pipeline' && (
-          <PipelineView leads={filteredLeads} onLeadClick={handleLeadClick} />
+          <PipelineView
+            leads={filteredLeads}
+            onLeadClick={handleLeadClick}
+            onMoveLead={(id, stage) => handleUpdateLead(id, { stage })}
+          />
         )}
         {!isLoading && viewMode === 'table' && (
           <TableView leads={filteredLeads} onLeadClick={handleLeadClick} />
