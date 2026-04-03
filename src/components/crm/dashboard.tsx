@@ -101,9 +101,22 @@ export function Dashboard() {
 
   const updateLeadMutation = useMutation({
     mutationFn: updateLead,
+    onMutate: async ({ id, updates }) => {
+      await queryClient.cancelQueries({ queryKey: LEADS_QUERY_KEY })
+      const previous = queryClient.getQueryData<Lead[]>(LEADS_QUERY_KEY)
+      queryClient.setQueryData<Lead[]>(LEADS_QUERY_KEY, (prev = []) =>
+        prev.map((lead) => (lead.id === id ? { ...lead, ...updates } : lead))
+      )
+      return { previous }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(LEADS_QUERY_KEY, context.previous)
+      }
+    },
     onSuccess: (updatedLead) => {
-      queryClient.setQueryData<Lead[]>(LEADS_QUERY_KEY, (previous = []) =>
-        previous.map((lead) => (lead.id === updatedLead.id ? updatedLead : lead))
+      queryClient.setQueryData<Lead[]>(LEADS_QUERY_KEY, (prev = []) =>
+        prev.map((lead) => (lead.id === updatedLead.id ? updatedLead : lead))
       )
     },
   })
