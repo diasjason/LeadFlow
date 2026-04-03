@@ -101,12 +101,16 @@ export function Dashboard() {
 
   const updateLeadMutation = useMutation({
     mutationFn: updateLead,
-    onMutate: async ({ id, updates }) => {
-      await queryClient.cancelQueries({ queryKey: LEADS_QUERY_KEY })
+    onMutate: ({ id, updates }) => {
+      // Synchronous — no await, so setQueryData runs in the same React render
+      // batch as the drag event. An await here creates a microtask boundary that
+      // lets React flush a render with the card back in its old lane (the flash).
       const previous = queryClient.getQueryData<Lead[]>(LEADS_QUERY_KEY)
       queryClient.setQueryData<Lead[]>(LEADS_QUERY_KEY, (prev = []) =>
         prev.map((lead) => (lead.id === id ? { ...lead, ...updates } : lead))
       )
+      // Fire-and-forget — we just don't want a stale refetch to overwrite us
+      void queryClient.cancelQueries({ queryKey: LEADS_QUERY_KEY })
       return { previous }
     },
     onError: (_err, _vars, context) => {
