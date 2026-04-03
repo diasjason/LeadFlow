@@ -165,9 +165,8 @@ export function Dashboard() {
   }
 
   const handleImportComplete = (count: number) => {
-    // In a real app, this would add the imported leads
-    // For now, we'll just close the modal and show a toast
     console.log(`Imported ${count} leads`)
+    void queryClient.invalidateQueries({ queryKey: LEADS_QUERY_KEY })
   }
 
   return (

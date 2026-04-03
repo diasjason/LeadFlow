@@ -39,6 +39,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { SOURCES, CATEGORIES, type Source, type Category } from '@/lib/types'
 import { toast } from 'sonner'
+import type { ColumnMapping, ImportField } from '@/lib/import/types'
 
 interface ImportModalProps {
   open: boolean
@@ -48,24 +49,23 @@ interface ImportModalProps {
 
 type Step = 1 | 2 | 3
 
-type LeadFlowField = 'name' | 'phone' | 'email' | 'source' | 'category' | 'notes' | 'skip'
-
-interface ColumnMapping {
-  excelColumn: string
-  leadFlowField: LeadFlowField
+interface PreviewResponse {
+  sheetName: string
+  columns: string[]
+  rows: Record<string, string>[]
+  mappings: ColumnMapping[]
+  summary: {
+    totalRows: number
+    validRows: number
+    skippedRows: number
+  }
+  profile: {
+    id: string
+    label: string
+  }
 }
 
-// Mock data for demonstration
-const MOCK_EXCEL_COLUMNS = ['Full Name', 'Mobile Number', 'Email Address', 'City', 'Remarks']
-const MOCK_EXCEL_DATA = [
-  ['Rahul Verma', '+91 99887 76655', 'rahul@email.com', 'Mumbai', 'Interested in 2BHK'],
-  ['Anita Desai', '+91 88776 65544', 'anita.d@gmail.com', 'Pune', 'Budget: 80L'],
-  ['Kiran Rao', '+91 77665 54433', '', 'Bangalore', 'Looking for investment'],
-  ['Suresh Menon', '+91 66554 43322', 'suresh.m@company.com', 'Chennai', ''],
-  ['Pooja Shah', '+91 55443 32211', 'pooja.shah@outlook.com', 'Hyderabad', 'Referred by Amit'],
-]
-
-const FIELD_OPTIONS: { value: LeadFlowField; label: string }[] = [
+const FIELD_OPTIONS: { value: ImportField; label: string }[] = [
   { value: 'name', label: 'Name' },
   { value: 'phone', label: 'Phone' },
   { value: 'email', label: 'Email' },
@@ -75,13 +75,32 @@ const FIELD_OPTIONS: { value: LeadFlowField; label: string }[] = [
   { value: 'skip', label: 'Skip' },
 ]
 
-const autoMapColumn = (columnName: string): LeadFlowField => {
-  const lower = columnName.toLowerCase()
-  if (lower.includes('name') || lower.includes('full')) return 'name'
-  if (lower.includes('phone') || lower.includes('mobile') || lower.includes('contact')) return 'phone'
-  if (lower.includes('email') || lower.includes('mail')) return 'email'
-  if (lower.includes('note') || lower.includes('remark') || lower.includes('comment')) return 'notes'
-  return 'skip'
+function getMappedPreviewRow(row: Record<string, string>, mappings: ColumnMapping[]) {
+  const valuesByField: Record<ImportField, string[]> = {
+    name: [],
+    phone: [],
+    email: [],
+    source: [],
+    category: [],
+    notes: [],
+    skip: [],
+  }
+
+  mappings.forEach((mapping) => {
+    const value = row[mapping.excelColumn]?.trim()
+    if (!value) {
+      return
+    }
+
+    valuesByField[mapping.leadFlowField].push(value)
+  })
+
+  return {
+    name: valuesByField.name.join(' ').trim() || '-',
+    phone: valuesByField.phone[0] ?? '-',
+    email: valuesByField.email[0] ?? '-',
+    notes: valuesByField.notes.join(' | ') || '-',
+  }
 }
 
 export function ImportModal({
@@ -98,6 +117,32 @@ export function ImportModal({
   const [sendWhatsApp, setSendWhatsApp] = useState(true)
   const [isImporting, setIsImporting] = useState(false)
   const [importProgress, setImportProgress] = useState(0)
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false)
+  const [previewRows, setPreviewRows] = useState<Record<string, string>[]>([])
+  const [previewColumns, setPreviewColumns] = useState<string[]>([])
+  const [profileId, setProfileId] = useState('client-test-data-v1')
+  const [profileLabel, setProfileLabel] = useState('Client 1 - Test Data')
+  const [totalRows, setTotalRows] = useState(0)
+  const [validRowsCount, setValidRowsCount] = useState(0)
+  const [skippedCount, setSkippedCount] = useState(0)
+
+  const resetState = () => {
+    setStep(1)
+    setSelectedFile(null)
+    setColumnMappings([])
+    setDefaultSource('excel')
+    setDefaultCategory('warm')
+    setSendWhatsApp(true)
+    setImportProgress(0)
+    setIsPreviewLoading(false)
+    setPreviewRows([])
+    setPreviewColumns([])
+    setProfileId('client-test-data-v1')
+    setProfileLabel('Client 1 - Test Data')
+    setTotalRows(0)
+    setValidRowsCount(0)
+    setSkippedCount(0)
+  }
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -109,26 +154,6 @@ export function ImportModal({
     setIsDragging(false)
   }, [])
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-    const file = e.dataTransfer.files[0]
-    if (file && isValidFile(file)) {
-      processFile(file)
-    } else {
-      toast.error('Please upload a valid Excel or CSV file')
-    }
-  }, [])
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file && isValidFile(file)) {
-      processFile(file)
-    } else {
-      toast.error('Please upload a valid Excel or CSV file')
-    }
-  }
-
   const isValidFile = (file: File): boolean => {
     const validTypes = [
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -136,91 +161,206 @@ export function ImportModal({
       'text/csv',
     ]
     const validExtensions = ['.xlsx', '.xls', '.csv']
+
     return (
       validTypes.includes(file.type) ||
       validExtensions.some((ext) => file.name.toLowerCase().endsWith(ext))
     )
   }
 
-  const processFile = (file: File) => {
+  const runPreview = async (file: File) => {
+    setIsPreviewLoading(true)
+
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('defaultSource', defaultSource)
+      formData.append('defaultCategory', defaultCategory)
+      formData.append('profileId', profileId)
+
+      const response = await fetch('/api/imports/preview', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to preview import file')
+      }
+
+      const preview = (await response.json()) as PreviewResponse
+      setColumnMappings(preview.mappings)
+      setPreviewRows(preview.rows)
+      setPreviewColumns(preview.columns)
+      setProfileId(preview.profile.id)
+      setProfileLabel(preview.profile.label)
+      setTotalRows(preview.summary.totalRows)
+      setValidRowsCount(preview.summary.validRows)
+      setSkippedCount(preview.summary.skippedRows)
+    } catch (error) {
+      console.error(error)
+      toast.error('Could not parse this file. Please check the format and retry.')
+      setSelectedFile(null)
+      setColumnMappings([])
+      setPreviewRows([])
+      setPreviewColumns([])
+      setTotalRows(0)
+      setValidRowsCount(0)
+      setSkippedCount(0)
+    } finally {
+      setIsPreviewLoading(false)
+    }
+  }
+
+  const processFile = async (file: File) => {
     if (file.size > 5 * 1024 * 1024) {
       toast.error('File size exceeds 5MB limit')
       return
     }
+
     setSelectedFile(file)
-    // Initialize column mappings with auto-detection
-    const mappings = MOCK_EXCEL_COLUMNS.map((col) => ({
-      excelColumn: col,
-      leadFlowField: autoMapColumn(col),
-    }))
-    setColumnMappings(mappings)
+    await runPreview(file)
+  }
+
+  const handleDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault()
+      setIsDragging(false)
+      const file = e.dataTransfer.files[0]
+
+      if (file && isValidFile(file)) {
+        await processFile(file)
+      } else {
+        toast.error('Please upload a valid Excel or CSV file')
+      }
+    },
+    [defaultCategory, defaultSource, profileId]
+  )
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file && isValidFile(file)) {
+      await processFile(file)
+    } else {
+      toast.error('Please upload a valid Excel or CSV file')
+    }
   }
 
   const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return bytes + ' B'
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
-  const updateMapping = (index: number, field: LeadFlowField) => {
+  const updateMapping = async (index: number, field: ImportField) => {
     const newMappings = [...columnMappings]
     newMappings[index] = { ...newMappings[index], leadFlowField: field }
     setColumnMappings(newMappings)
+
+    if (!selectedFile) {
+      return
+    }
+
+    try {
+      const formData = new FormData()
+      formData.append('file', selectedFile)
+      formData.append('mappings', JSON.stringify(newMappings))
+      formData.append('profileId', profileId)
+      formData.append('defaultSource', defaultSource)
+      formData.append('defaultCategory', defaultCategory)
+
+      const response = await fetch('/api/imports/commit?dryRun=true', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (response.ok) {
+        const body = (await response.json()) as { totalRows: number; imported: number; skipped: number }
+        setTotalRows(body.totalRows)
+        setValidRowsCount(body.imported)
+        setSkippedCount(body.skipped)
+      }
+    } catch {
+      // summary refresh is optional while editing mappings
+    }
   }
 
   const requiredFieldsMapped = useMemo(() => {
     const hasName = columnMappings.some((m) => m.leadFlowField === 'name')
     const hasPhone = columnMappings.some((m) => m.leadFlowField === 'phone')
+
     return { hasName, hasPhone, isValid: hasName && hasPhone }
   }, [columnMappings])
 
-  const validLeadsCount = useMemo(() => {
-    // In real implementation, this would check actual data
-    return MOCK_EXCEL_DATA.length
-  }, [])
-
-  const skippedCount = 0 // Mock value
+  const mappedPreviewRows = useMemo(
+    () => previewRows.map((row) => getMappedPreviewRow(row, columnMappings)),
+    [previewRows, columnMappings]
+  )
 
   const handleImport = async () => {
-    setIsImporting(true)
-    setImportProgress(0)
-
-    // Simulate import progress
-    for (let i = 0; i <= 100; i += 10) {
-      await new Promise((resolve) => setTimeout(resolve, 150))
-      setImportProgress(i)
+    if (!selectedFile) {
+      return
     }
 
-    setIsImporting(false)
-    toast.success(
-      `Successfully imported ${validLeadsCount} leads. ${
-        sendWhatsApp ? `${validLeadsCount} WhatsApp messages queued.` : ''
-      }`
-    )
-    onImportComplete(validLeadsCount)
-    handleClose()
+    try {
+      setIsImporting(true)
+      setImportProgress(15)
+
+      const formData = new FormData()
+      formData.append('file', selectedFile)
+      formData.append('mappings', JSON.stringify(columnMappings))
+      formData.append('profileId', profileId)
+      formData.append('defaultSource', defaultSource)
+      formData.append('defaultCategory', defaultCategory)
+      formData.append('sendWhatsApp', String(sendWhatsApp))
+
+      const response = await fetch('/api/imports/commit', {
+        method: 'POST',
+        body: formData,
+      })
+
+      setImportProgress(80)
+
+      if (!response.ok) {
+        throw new Error('Failed to import leads')
+      }
+
+      const result = (await response.json()) as {
+        imported: number
+        skipped: number
+        whatsappQueued: number
+      }
+
+      setImportProgress(100)
+      toast.success(
+        `Imported ${result.imported} leads. Skipped ${result.skipped}. ${
+          sendWhatsApp ? `${result.whatsappQueued} WhatsApp messages queued.` : ''
+        }`
+      )
+      onImportComplete(result.imported)
+      handleClose()
+    } catch (error) {
+      console.error(error)
+      toast.error('Import failed. Please verify mapping and try again.')
+    } finally {
+      setIsImporting(false)
+      setImportProgress(0)
+    }
   }
 
   const handleClose = () => {
     if (!isImporting) {
-      setStep(1)
-      setSelectedFile(null)
-      setColumnMappings([])
-      setDefaultSource('excel')
-      setDefaultCategory('warm')
-      setSendWhatsApp(true)
-      setImportProgress(0)
+      resetState()
       onOpenChange(false)
     }
   }
 
   const renderStepIndicator = () => (
-    <div className="flex items-center justify-center gap-2 mb-6">
+    <div className="mb-6 flex items-center justify-center gap-2">
       {[1, 2, 3].map((s) => (
         <div key={s} className="flex items-center">
           <div
             className={cn(
-              'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors',
+              'flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium transition-colors',
               step >= s
                 ? 'bg-primary text-primary-foreground'
                 : 'bg-muted text-muted-foreground'
@@ -231,7 +371,7 @@ export function ImportModal({
           {s < 3 && (
             <div
               className={cn(
-                'w-12 h-0.5 mx-1',
+                'mx-1 h-0.5 w-12',
                 step > s ? 'bg-primary' : 'bg-muted'
               )}
             />
@@ -243,7 +383,7 @@ export function ImportModal({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[700px] bg-card border-border max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden border-border bg-card sm:max-w-[700px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-xl">
             <FileSpreadsheet className="h-5 w-5 text-primary" />
@@ -254,7 +394,6 @@ export function ImportModal({
         {renderStepIndicator()}
 
         <div className="flex-1 overflow-auto">
-          {/* Step 1: Upload */}
           {step === 1 && (
             <div className="space-y-4">
               <div
@@ -262,7 +401,7 @@ export function ImportModal({
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
                 className={cn(
-                  'border-2 border-dashed rounded-lg p-8 text-center transition-colors',
+                  'rounded-lg border-2 border-dashed p-8 text-center transition-colors',
                   isDragging
                     ? 'border-primary bg-primary/5'
                     : 'border-border hover:border-primary/50',
@@ -271,36 +410,46 @@ export function ImportModal({
               >
                 {selectedFile ? (
                   <div className="flex flex-col items-center gap-2">
-                    <div className="w-12 h-12 rounded-lg bg-success/20 flex items-center justify-center">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-success/20">
                       <FileSpreadsheet className="h-6 w-6 text-success" />
                     </div>
-                    <p className="font-medium text-foreground">
-                      {selectedFile.name}
-                    </p>
+                    <p className="font-medium text-foreground">{selectedFile.name}</p>
                     <p className="text-sm text-muted-foreground">
                       {formatFileSize(selectedFile.size)}
                     </p>
+                    <p className="text-xs text-muted-foreground">
+                      Auto profile: {profileLabel}
+                    </p>
+                    {isPreviewLoading && (
+                      <p className="text-xs text-muted-foreground">Parsing file...</p>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => setSelectedFile(null)}
+                      onClick={() => {
+                        setSelectedFile(null)
+                        setColumnMappings([])
+                        setPreviewRows([])
+                        setPreviewColumns([])
+                        setTotalRows(0)
+                        setValidRowsCount(0)
+                        setSkippedCount(0)
+                      }}
                       className="text-muted-foreground hover:text-foreground"
                     >
-                      <X className="h-4 w-4 mr-1" />
+                      <X className="mr-1 h-4 w-4" />
                       Remove
                     </Button>
                   </div>
                 ) : (
                   <div className="flex flex-col items-center gap-2">
-                    <div className="w-12 h-12 rounded-lg bg-secondary flex items-center justify-center">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-secondary">
                       <Upload className="h-6 w-6 text-muted-foreground" />
                     </div>
-                    <p className="font-medium text-foreground">
-                      Drag and drop your file here
-                    </p>
+                    <p className="font-medium text-foreground">Drag and drop your file here</p>
                     <p className="text-sm text-muted-foreground">
                       or{' '}
-                      <label className="text-primary cursor-pointer hover:underline">
+                      <label className="cursor-pointer text-primary hover:underline">
                         click to browse
                         <input
                           type="file"
@@ -310,7 +459,7 @@ export function ImportModal({
                         />
                       </label>
                     </p>
-                    <p className="text-xs text-muted-foreground mt-2">
+                    <p className="mt-2 text-xs text-muted-foreground">
                       Supports .xlsx, .xls, .csv (Max 5MB)
                     </p>
                   </div>
@@ -319,31 +468,30 @@ export function ImportModal({
             </div>
           )}
 
-          {/* Step 2: Column Mapping */}
           {step === 2 && (
             <div className="space-y-4">
               <div>
-                <h4 className="text-sm font-medium mb-2">Preview (First 5 rows)</h4>
+                <h4 className="mb-2 text-sm font-medium">Preview (First 5 rows)</h4>
                 <ScrollArea className="h-[140px] rounded-lg border border-border">
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-secondary/50">
-                        {MOCK_EXCEL_COLUMNS.map((col, i) => (
-                          <TableHead key={i} className="text-xs whitespace-nowrap">
+                        {previewColumns.map((col) => (
+                          <TableHead key={col} className="whitespace-nowrap text-xs">
                             {col}
                           </TableHead>
                         ))}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {MOCK_EXCEL_DATA.map((row, i) => (
-                        <TableRow key={i}>
-                          {row.map((cell, j) => (
+                      {previewRows.map((row, rowIndex) => (
+                        <TableRow key={rowIndex}>
+                          {previewColumns.map((column) => (
                             <TableCell
-                              key={j}
-                              className="text-xs py-2 whitespace-nowrap"
+                              key={`${rowIndex}-${column}`}
+                              className="whitespace-nowrap py-2 text-xs"
                             >
-                              {cell || '-'}
+                              {row[column] || '-'}
                             </TableCell>
                           ))}
                         </TableRow>
@@ -354,22 +502,20 @@ export function ImportModal({
               </div>
 
               <div>
-                <h4 className="text-sm font-medium mb-2">Map Columns</h4>
+                <h4 className="mb-2 text-sm font-medium">Map Columns</h4>
                 <div className="space-y-2">
                   {columnMappings.map((mapping, index) => (
                     <div
-                      key={index}
-                      className="flex items-center gap-3 p-2 rounded-lg bg-secondary/30"
+                      key={mapping.excelColumn}
+                      className="flex items-center gap-3 rounded-lg bg-secondary/30 p-2"
                     >
-                      <div className="flex-1 text-sm truncate">
-                        {mapping.excelColumn}
-                      </div>
-                      <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="flex-1 truncate text-sm">{mapping.excelColumn}</div>
+                      <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <Select
                         value={mapping.leadFlowField}
-                        onValueChange={(v) => updateMapping(index, v as LeadFlowField)}
+                        onValueChange={(v) => void updateMapping(index, v as ImportField)}
                       >
-                        <SelectTrigger className="w-[140px] bg-secondary border-border">
+                        <SelectTrigger className="w-[160px] border-border bg-secondary">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -381,18 +527,17 @@ export function ImportModal({
                         </SelectContent>
                       </Select>
                       {mapping.leadFlowField !== 'skip' && (
-                        <Check className="h-4 w-4 text-success shrink-0" />
+                        <Check className="h-4 w-4 shrink-0 text-success" />
                       )}
                     </div>
                   ))}
                 </div>
 
                 {!requiredFieldsMapped.isValid && (
-                  <div className="flex items-center gap-2 mt-3 p-2 rounded-lg bg-warm/10 border border-warm/30">
-                    <AlertCircle className="h-4 w-4 text-warm shrink-0" />
+                  <div className="mt-3 flex items-center gap-2 rounded-lg border border-warm/30 bg-warm/10 p-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-warm" />
                     <p className="text-sm text-warm">
-                      Please map required fields:{' '}
-                      {!requiredFieldsMapped.hasName && 'Name'}
+                      Please map required fields: {!requiredFieldsMapped.hasName && 'Name'}
                       {!requiredFieldsMapped.hasName &&
                         !requiredFieldsMapped.hasPhone &&
                         ', '}
@@ -404,31 +549,28 @@ export function ImportModal({
             </div>
           )}
 
-          {/* Step 3: Review & Import */}
           {step === 3 && (
             <div className="space-y-4">
-              <div className="p-4 rounded-lg bg-secondary/50 border border-border">
-                <h4 className="text-sm font-medium mb-2">Import Summary</h4>
-                <div className="flex gap-4">
+              <div className="rounded-lg border border-border bg-secondary/50 p-4">
+                <h4 className="mb-2 text-sm font-medium">Import Summary</h4>
+                <div className="flex gap-6">
                   <div>
-                    <p className="text-2xl font-bold text-success">
-                      {validLeadsCount}
-                    </p>
+                    <p className="text-2xl font-bold text-foreground">{totalRows}</p>
+                    <p className="text-xs text-muted-foreground">Total rows</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-success">{validRowsCount}</p>
                     <p className="text-xs text-muted-foreground">Ready to import</p>
                   </div>
                   <div>
-                    <p className="text-2xl font-bold text-muted-foreground">
-                      {skippedCount}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Skipped (missing required)
-                    </p>
+                    <p className="text-2xl font-bold text-muted-foreground">{skippedCount}</p>
+                    <p className="text-xs text-muted-foreground">Skipped</p>
                   </div>
                 </div>
               </div>
 
               <div>
-                <h4 className="text-sm font-medium mb-2">Preview</h4>
+                <h4 className="mb-2 text-sm font-medium">Mapped Preview</h4>
                 <ScrollArea className="h-[120px] rounded-lg border border-border">
                   <Table>
                     <TableHeader>
@@ -440,16 +582,12 @@ export function ImportModal({
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {MOCK_EXCEL_DATA.map((row, i) => (
+                      {mappedPreviewRows.map((row, i) => (
                         <TableRow key={i}>
-                          <TableCell className="text-xs py-2">{row[0]}</TableCell>
-                          <TableCell className="text-xs py-2">{row[1]}</TableCell>
-                          <TableCell className="text-xs py-2">
-                            {row[2] || '-'}
-                          </TableCell>
-                          <TableCell className="text-xs py-2">
-                            {row[4] || '-'}
-                          </TableCell>
+                          <TableCell className="py-2 text-xs">{row.name}</TableCell>
+                          <TableCell className="py-2 text-xs">{row.phone}</TableCell>
+                          <TableCell className="py-2 text-xs">{row.email}</TableCell>
+                          <TableCell className="py-2 text-xs">{row.notes}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -457,16 +595,13 @@ export function ImportModal({
                 </ScrollArea>
               </div>
 
-              <div className="space-y-3 p-4 rounded-lg bg-secondary/50 border border-border">
+              <div className="space-y-3 rounded-lg border border-border bg-secondary/50 p-4">
                 <h4 className="text-sm font-medium">Import Options</h4>
 
                 <div className="flex items-center justify-between">
                   <label className="text-sm">Default Source</label>
-                  <Select
-                    value={defaultSource}
-                    onValueChange={(v) => setDefaultSource(v as Source)}
-                  >
-                    <SelectTrigger className="w-[140px] bg-secondary border-border">
+                  <Select value={defaultSource} onValueChange={(v) => setDefaultSource(v as Source)}>
+                    <SelectTrigger className="w-[140px] border-border bg-secondary">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -485,7 +620,7 @@ export function ImportModal({
                     value={defaultCategory}
                     onValueChange={(v) => setDefaultCategory(v as Category)}
                   >
-                    <SelectTrigger className="w-[140px] bg-secondary border-border">
+                    <SelectTrigger className="w-[140px] border-border bg-secondary">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -499,9 +634,7 @@ export function ImportModal({
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <label className="text-sm">
-                    Send WhatsApp welcome message to all
-                  </label>
+                  <label className="text-sm">Send WhatsApp welcome message to all</label>
                   <Switch checked={sendWhatsApp} onCheckedChange={setSendWhatsApp} />
                 </div>
               </div>
@@ -524,10 +657,10 @@ export function ImportModal({
             <Button
               variant="outline"
               onClick={() => setStep((step - 1) as Step)}
-              disabled={isImporting}
+              disabled={isImporting || isPreviewLoading}
               className="mr-auto"
             >
-              <ArrowLeft className="h-4 w-4 mr-1" />
+              <ArrowLeft className="mr-1 h-4 w-4" />
               Back
             </Button>
           )}
@@ -538,21 +671,22 @@ export function ImportModal({
             <Button
               onClick={() => setStep((step + 1) as Step)}
               disabled={
+                isPreviewLoading ||
                 (step === 1 && !selectedFile) ||
                 (step === 2 && !requiredFieldsMapped.isValid)
               }
               className="bg-primary text-primary-foreground hover:bg-primary/90"
             >
               Next
-              <ArrowRight className="h-4 w-4 ml-1" />
+              <ArrowRight className="ml-1 h-4 w-4" />
             </Button>
           ) : (
             <Button
               onClick={handleImport}
-              disabled={isImporting}
+              disabled={isImporting || validRowsCount === 0}
               className="bg-primary text-primary-foreground hover:bg-primary/90"
             >
-              {isImporting ? 'Importing...' : `Import ${validLeadsCount} Leads`}
+              {isImporting ? 'Importing...' : `Import ${validRowsCount} Leads`}
             </Button>
           )}
         </DialogFooter>
