@@ -73,7 +73,6 @@ export function LeadDetailModal({
   onUpdateLead,
 }: LeadDetailModalProps) {
   const [selectedStage, setSelectedStage] = useState<Stage | ''>('')
-  const [isCalling, setIsCalling] = useState(false)
 
   if (!lead) return null
 
@@ -170,35 +169,6 @@ export function LeadDetailModal({
       })
     } catch {
       toast.error('Failed to update lead')
-    }
-  }
-
-  const handleVapiCall = async () => {
-    setIsCalling(true)
-    try {
-      const response = await fetch('/api/vapi/call', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ leadId: lead.id }),
-      })
-
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}))
-        throw new Error(payload.error ?? 'Failed to start Vapi call')
-      }
-
-      const payload = (await response.json()) as { callId?: string }
-      toast.success(
-        payload.callId
-          ? `Vapi call started (${payload.callId})`
-          : 'Vapi call started'
-      )
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Vapi call failed')
-    } finally {
-      setIsCalling(false)
     }
   }
 
@@ -362,16 +332,6 @@ export function LeadDetailModal({
             {lead.stage !== 'lost' && lead.stage !== 'closed-won' && (
               <>
                 <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleVapiCall}
-                    disabled={isCalling}
-                    className="gap-1"
-                  >
-                    <Phone className="h-4 w-4" />
-                    {isCalling ? 'Calling...' : 'Call with Vapi'}
-                  </Button>
                   <Button
                     variant="outline"
                     size="sm"

@@ -129,7 +129,7 @@ export function BroadcastModal({
             Re-Marketing Broadcast
           </DialogTitle>
           <DialogDescription>
-            Send bulk WhatsApp broadcast to all {lostLeads.length} lost leads
+            Queue a broadcast campaign for {lostLeads.length} lost leads
           </DialogDescription>
         </DialogHeader>
 

@@ -2,13 +2,9 @@ import {
   LeadCategory,
   LeadSource,
   LeadStage,
-  MessageChannel,
-  MessageDirection,
   type Lead,
 } from '@prisma/client'
 import { NextRequest, NextResponse } from 'next/server'
-import { getMessageProvider } from '@/lib/messaging/provider'
-import { WHATSAPP_TEMPLATES } from '@/lib/messaging/templates'
 import { prisma } from '@/lib/prisma'
 import { getNextFollowUpDate } from '@/lib/workflow/engine'
 
@@ -244,79 +240,7 @@ export async function POST(request: Request) {
       },
     })
 
-    let leadForResponse = created
-
-    try {
-      const organization = await prisma.organization.findUnique({
-        where: { id: organizationId },
-      })
-
-      const hasWhatsApp =
-        (organization?.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID) &&
-        (organization?.whatsappToken || process.env.WHATSAPP_ACCESS_TOKEN)
-
-      if (organization && hasWhatsApp) {
-        const provider = getMessageProvider(organization)
-        const firstName = String(body.name).trim().split(' ')[0] ?? 'there'
-
-        const welcomeResult = await provider.sendMessage({
-          to: String(body.phone),
-          body: '',
-          templateId: WHATSAPP_TEMPLATES.WELCOME.name,
-          templateParams: {
-            '1': firstName,
-            '2': organization.name,
-          },
-        })
-
-        await prisma.message.create({
-          data: {
-            leadId: created.id,
-            channel: MessageChannel.WHATSAPP,
-            direction: MessageDirection.OUTBOUND,
-            status: welcomeResult.success ? 'SENT' : 'FAILED',
-            body: `Welcome template ${WHATSAPP_TEMPLATES.WELCOME.name}`,
-            templateId: WHATSAPP_TEMPLATES.WELCOME.name,
-            externalId: welcomeResult.externalId ?? null,
-          },
-        })
-
-        if (welcomeResult.success) {
-          const createdMetadata = (created.metadata ?? {}) as Record<string, unknown>
-          leadForResponse = await prisma.lead.update({
-            where: { id: created.id },
-            data: {
-              stage: 'CONTACTED',
-              attempts: 1,
-              lastContactAt: new Date(),
-              nextFollowUpAt: getNextFollowUpDate(1),
-              metadata: {
-                ...createdMetadata,
-                whatsAppSent: true,
-                documents:
-                  typeof createdMetadata.documents === 'object' &&
-                  createdMetadata.documents
-                    ? createdMetadata.documents
-                    : defaultDocuments,
-              },
-            },
-          })
-
-          await prisma.stageTransition.create({
-            data: {
-              leadId: created.id,
-              fromStage: 'NEW',
-              toStage: 'CONTACTED',
-              reason: 'auto_welcome_whatsapp',
-            },
-          })
-        }
-      }
-    } catch (welcomeError) {
-      console.error('Failed to send Meta welcome message:', welcomeError)
-    }
-
-    return NextResponse.json(toUiLead(leadForResponse), { status: 201 })
+    return NextResponse.json(toUiLead(created), { status: 201 })
   } catch (error) {
     console.error('Failed to create lead:', error)
     return NextResponse.json({ error: 'Failed to create lead' }, { status: 500 })
