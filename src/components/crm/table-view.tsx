@@ -70,7 +70,7 @@ export function TableView({ leads, onLeadClick }: TableViewProps) {
   )
 
   return (
-    <div className="flex-1 p-6 overflow-auto">
+    <div className="min-h-0 min-w-0 flex-1 overflow-auto p-4 sm:p-6">
       <div className="rounded-lg border border-border overflow-hidden">
         <Table>
           <TableHeader>

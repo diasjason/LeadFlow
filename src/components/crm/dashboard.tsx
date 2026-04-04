@@ -170,7 +170,7 @@ export function Dashboard() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-background text-foreground">
+    <div className="flex h-app-shell max-h-app-shell min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <Header
         onNewLead={() => setAddLeadOpen(true)}
         onBroadcast={() => setBroadcastOpen(true)}
@@ -191,9 +191,9 @@ export function Dashboard() {
         onViewModeChange={setViewMode}
       />
 
-      <main className="flex-1 overflow-hidden">
+      <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {isLoading && (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+          <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
             Loading leads...
           </div>
         )}

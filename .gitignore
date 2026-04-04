@@ -14,3 +14,5 @@ next.user-config.*
 node_modules
 .next/
 .DS_Store
+# clerk configuration (can include secrets)
+/.clerk/

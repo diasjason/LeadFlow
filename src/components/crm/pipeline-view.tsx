@@ -34,7 +34,7 @@ function MobilePipelineView({ leads, onLeadClick }: Omit<PipelineViewProps, 'onM
   const stageLeads = leads.filter((l) => l.stage === activeStage)
 
   return (
-    <div className="flex flex-col flex-1 overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {/* Stage tab bar */}
       <div className="flex gap-2 px-3 py-2 overflow-x-auto border-b border-border shrink-0 scrollbar-none">
         {STAGES.map((stage) => {
@@ -123,7 +123,7 @@ function Column({
 
       <div
         ref={setNodeRef}
-        className="flex-1 p-2 space-y-2 max-h-[calc(100vh-340px)] overflow-y-auto"
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2"
       >
         {leads.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center py-8 select-none">Drop here</p>
@@ -160,34 +160,36 @@ function DesktopPipelineView({ leads, onLeadClick, onMoveLead }: PipelineViewPro
   }
 
   return (
-    <DndContext
-      sensors={sensors}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragCancel={() => setActiveLead(null)}
-    >
-      <ScrollArea className="flex-1 w-full">
-        <div className="flex gap-4 p-6 min-w-max">
-          {STAGES.map((stage) => (
-            <Column
-              key={stage.id}
-              stage={stage}
-              leads={leads.filter((l) => l.stage === stage.id)}
-              onLeadClick={onLeadClick}
-            />
-          ))}
-        </div>
-        <ScrollBar orientation="horizontal" />
-      </ScrollArea>
-
-      <DragOverlay dropAnimation={null}>
-        {activeLead && (
-          <div className="w-[272px] rotate-1 opacity-95 shadow-xl">
-            <LeadCard lead={activeLead} onClick={() => {}} />
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <DndContext
+        sensors={sensors}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={() => setActiveLead(null)}
+      >
+        <ScrollArea className="min-h-0 min-w-0 flex-1">
+          <div className="flex min-w-max gap-4 p-6">
+            {STAGES.map((stage) => (
+              <Column
+                key={stage.id}
+                stage={stage}
+                leads={leads.filter((l) => l.stage === stage.id)}
+                onLeadClick={onLeadClick}
+              />
+            ))}
           </div>
-        )}
-      </DragOverlay>
-    </DndContext>
+          <ScrollBar orientation="horizontal" />
+        </ScrollArea>
+
+        <DragOverlay dropAnimation={null}>
+          {activeLead && (
+            <div className="w-[272px] rotate-1 opacity-95 shadow-xl">
+              <LeadCard lead={activeLead} onClick={() => {}} />
+            </div>
+          )}
+        </DragOverlay>
+      </DndContext>
+    </div>
   )
 }
 

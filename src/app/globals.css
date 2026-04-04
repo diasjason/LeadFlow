@@ -154,10 +154,12 @@
   html {
     background-color: var(--background);
     color: var(--foreground);
+    overflow-x: clip;
   }
   body {
     background-color: var(--background);
     color: var(--foreground);
+    overflow-x: clip;
   }
 }
 
@@ -192,6 +194,16 @@
   
   .ring-ring { --tw-ring-color: var(--ring) !important; }
   .ring-primary { --tw-ring-color: var(--primary) !important; }
+
+  /* Viewport height with vh → dvh fallback (same class string on server + client) */
+  .h-app-shell {
+    height: 100vh;
+    height: 100dvh;
+  }
+  .max-h-app-shell {
+    max-height: 100vh;
+    max-height: 100dvh;
+  }
 }
 
 /* Hide scrollbar while keeping scroll functionality */
